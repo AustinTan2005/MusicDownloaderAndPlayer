@@ -19,7 +19,6 @@ _stop_event = threading.Event()
 def _watch_and_advance():
     global _stop_watcher
 
-    # Wait for song to actually start
     time.sleep(2.0)
 
     while not _stop_watcher:
@@ -31,17 +30,17 @@ def _watch_and_advance():
         if not _is_paused and not pygame.mixer.music.get_busy():
             if _loop:
                 pygame.mixer.music.play()
-                time.sleep(2.0)  # wait for loop to start
+                time.sleep(2.0)
             else:
+                _stop_watcher = False
                 _advance_to_next_internal()
-                break
+                return
 
     _stop_watcher = False
     _stop_event.clear()
 
-
 def _advance_to_next_internal():
-    """Internal: advance to next song without spawning new watcher thread."""
+    """Internal: advance to next song."""
     global _current_id
 
     if _current_id is None:
@@ -59,9 +58,7 @@ def _advance_to_next_internal():
     else:
         next_idx = 0
 
-    # Play without spawning new thread
-    _play_internal(ids[next_idx])
-
+    play_music(ids[next_idx])
 
 def _play_internal(song_id: int):
     """Internal play function that doesn't spawn a new watcher thread."""
