@@ -19,6 +19,7 @@ _stop_event = threading.Event()
 def _watch_and_advance():
     global _stop_watcher
 
+    # Wait for song to actually start
     time.sleep(2.0)
 
     while not _stop_watcher:
@@ -30,14 +31,19 @@ def _watch_and_advance():
         if not _is_paused and not pygame.mixer.music.get_busy():
             if _loop:
                 pygame.mixer.music.play()
-                time.sleep(2.0)
+                # FIX 1: Check _stop_watcher after sleep so we don't zombie
+                for _ in range(4):
+                    if _stop_watcher:
+                        break
+                    time.sleep(0.5)
             else:
-                _stop_watcher = False
+                # FIX 2: Don't reset _stop_watcher here — play_music will manage it
                 _advance_to_next_internal()
                 return
 
     _stop_watcher = False
     _stop_event.clear()
+
 
 def _advance_to_next_internal():
     """Internal: advance to next song."""
@@ -59,6 +65,7 @@ def _advance_to_next_internal():
         next_idx = 0
 
     play_music(ids[next_idx])
+
 
 def _play_internal(song_id: int):
     """Internal play function that doesn't spawn a new watcher thread."""
@@ -170,7 +177,6 @@ def store_music(youtube_url: str) -> int:
         song_id = cursor.lastrowid
         conn.commit()
 
-
     safe_name = re.sub(r'[^\w\s-]', '', name.encode('ascii', 'ignore').decode())
     safe_name = re.sub(r'[\s]+', '_', safe_name)
     filename = f"{safe_name}_{song_id}"
@@ -229,10 +235,8 @@ def delete_music(song_id: int):
         print(f"[delete] No song with id={song_id}")
         return
 
-    # Stop watcher and unload from pygame
     _stop_watcher = True
-    import time
-    time.sleep(0.2)  # give watcher time to stop
+    time.sleep(0.2)
 
     try:
         pygame.mixer.music.stop()
@@ -276,25 +280,32 @@ def play_music(song_id: int):
 
     _stop_watcher = True
     _stop_event.set()
-    if _advance_thread and _advance_thread.is_alive():
+
+    # FIX 3: Don't join current thread (auto-advance calls play_music from watcher thread)
+    if _advance_thread and _advance_thread.is_alive() and threading.current_thread() != _advance_thread:
         _advance_thread.join(timeout=2.0)
 
     _stop_watcher = False
-    _stop_event.clear()  # ← clear AFTER join, so new thread doesn't see it
+    _stop_event.clear()
 
-    pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=4096)
+    # FIX 4: Only init mixer if not already initialized — avoids reset/glitch on every song
+    if not pygame.mixer.get_init():
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=4096)
+
     try:
         pygame.mixer.music.load(song["location"])
         pygame.mixer.music.play()
         pygame.mixer.music.set_endevent(pygame.USEREVENT)
     except Exception:
         pass
+
     _current_id = song_id
     _is_paused = False
     print(f"[▶] Now playing: '{song['name']}' (id={song_id})")
 
     _advance_thread = threading.Thread(target=_watch_and_advance, daemon=True)
     _advance_thread.start()
+
 
 def stop_music():
     """Stop playback completely."""
@@ -359,7 +370,6 @@ def next_music():
     else:
         next_id = ids[0]
 
-    # Stop current watcher and play next
     _stop_watcher = True
     play_music(next_id)
 
@@ -388,7 +398,6 @@ def previous_music():
     else:
         prev_id = ids[-1]
 
-    # Stop current watcher and play previous
     _stop_watcher = True
     play_music(prev_id)
 
